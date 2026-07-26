@@ -1,2 +1,2 @@
 # masail-ai
-Grounded Islamic QA App
+Grounded Islamic Q&A App
