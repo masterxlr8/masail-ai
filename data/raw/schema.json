@@ -151,7 +151,7 @@
   },
 
   "sampling": {
-    "description": "IslamQA is 15,296 unique fatwas after cleaning - more than a one-day demo needs, and it would dominate every other source in the corpus. config.ISLAMQA_SAMPLE_FRAC takes a stratified 10%: proportional within each of the 266 topics with a floor of one, seeded at SAMPLE_SEED=42. Stratifying rather than sampling at random keeps the topic mix identical to the full corpus and guarantees no topic disappears. FiqhQA is never sampled - its 121 rows ARE the four-school comparison layer. Set ISLAMQA_SAMPLE_FRAC=1.0, or run `python ingest.py --full`, to build the whole thing; nothing else changes.",
+    "description": "IslamQA is 15,296 unique fatwas after cleaning - more than a one-day demo needs, and it would dominate every other source in the corpus. config.ISLAMQA_SAMPLE_FRAC takes a stratified 10%: proportional within each of the 266 topics with a floor of one, seeded at SAMPLE_SEED=42. Stratifying rather than sampling at random keeps the topic mix identical to the full corpus and guarantees no topic disappears. Set ISLAMQA_SAMPLE_FRAC=1.0, or run `python ingest.py --full`, to build the whole thing; nothing else changes.",
     "pins": "Stratification protects topic coverage but is blind to what a specific demo query needs. There is exactly ONE bitcoin fatwa in all 15,296, so a 10% sample dropped it. config.SAMPLE_PINS is a list of regexes; any fatwa whose text matches is kept regardless of the sample, currently rescuing 58 docs on finance terms. Add a term whenever a demo query turns out to have thin coverage.",
     "balance": "For the SCRAPED sources the goal is the opposite of preserving the mix - the mix is the bias. islamqa.org holds 91,580 Hanafi URLs against 182 Hanbali, so proportional sampling would rebuild exactly what we are correcting. scrape.py's balanced_quota() fills the smallest madhhab pools to exhaustion first and splits the remainder evenly, so Hanbali and Maliki come in whole and Hanafi/Shafi'i are sampled down to meet them."
   },
@@ -263,9 +263,9 @@
   ],
 
   "sources": {
-    "description": "Four sources, one shape. The corpus was 93% IslamQA.info (Salafi); the two scrapes exist to correct that.",
+    "description": "Three sources, one shape. The corpus was 93% IslamQA.info (Salafi); the two scrapes exist to correct that.",
     "islamqa": "kingkaung/english_islamqainfo on HuggingFace. 19,052 rows -> 15,296 unique -> ~1,589 after a stratified 10% sample plus pins. Salafi. CC-BY-NC-4.0.",
-    "fiqhqa": "MBZUAI/FiqhQA, english config. 121 rows, never sampled - the only multi_school source, and the four-school comparison layer.",
+    "fiqhqa": "REMOVED. MBZUAI/FiqhQA, english config, 121 multi_school rows - the former four-school comparison layer. Dropped because all 121 shared ONE url (the HuggingFace dataset page), so a card's source link led to a download rather than to a fatwa, and none named a scholar. A card reading 'the Hanafi school holds X' with nothing behind it a reader can open is an authority this tool is not entitled to claim. The multi_school record_type is kept above as vocabulary for a future source that CAN cite itself per school; nothing emits it today, and ingest.py and search.py both fail loudly if one appears.",
     "islamqaorg": "SCRAPED from islamqa.org. WordPress; wp-json is 401 so scrape.py walks sitemap.xml -> 98,637 URLs. An aggregator over ~40 darul-iftas with madhhab AND institution in the URL path, giving all four Sunni schools labelled per record. Sampled BALANCED not proportional (see sampling.balance).",
     "askimam": "SCRAPED from askimam.org. React SPA over a Django REST API at askimam.org:8000; list /api/v1/fatwas/fatwas/?page=N (24,865 total), detail /api/v1/fatwas/fatwas/<id>/. Uniformly Hanafi, Mufti Ebrahim Desai. Pages sampled evenly across the full range so the corpus spans the 2000s-2020s rather than only recent fatwas.",
     "note": "islamqa.org republishes askimam under /hanafi/askimam/ (20,386 URLs). Those are skipped there since askimam.org is scraped directly; content_hash would catch any that slip through."

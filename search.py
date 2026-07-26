@@ -1,9 +1,8 @@
-"""Retrieval over the two indexes.
+"""Retrieval over the fatwa index.
 
     from search import Index
     idx = Index()
-    hits  = idx.search_single(query, k=5)   # hybrid, across all single-source fatwas
-    panel = idx.search_multi(query, k=1)    # the four-school comparison record
+    hits = idx.search(query, k=5)   # hybrid, across the whole corpus
 
 WHY HYBRID
 ----------
@@ -13,18 +12,49 @@ weak where embeddings are strong. Reciprocal rank fusion combines the two
 without needing score calibration, which is the whole reason to use RRF rather
 than a weighted sum of a cosine and a BM25 score that live on different scales.
 
-WHY TWO INDEXES
----------------
-The 121 multi_school records would never win top-k against ~3,900 single-source
-fatwas. Searching them separately costs nothing and guarantees the four-school
-panel fires whenever there is a real match. app.py turns that into a visible
-coverage badge rather than a silent absence.
-
 DIVERSITY
 ---------
-`search_single` caps how many hits any one source may occupy (MAX_PER_SOURCE).
-Without it a single prolific darul-ifta can fill all five slots, which defeats
-the point of having assembled a multi-orientation corpus.
+The corpus has six distinct voices, and they do not line up with sites:
+
+    islamqa      Salafi                     askimam      Hanafi
+    islamqaorg   Hanafi / Maliki / Shafi'i / Hanbali
+
+Capping per SITE therefore did not do what it looked like it did. islamqaorg is
+organised by school, so its two slots could both land in the same section, and
+"where do you place your hands in prayer" - the canonical four-way split, and the
+whole reason this corpus exists - came back as two Hanbali fatwas that barely
+disagreed. The site cap was satisfied; the point of it was not.
+
+So the cap keys on (source, orientation), and `search` fills in two passes: one
+hit per voice first, in fused order, then the remaining slots by rank up to
+MAX_PER_VOICE each. Breadth before depth - without the second pass a query
+covered by only one voice would return a single card.
+
+The first pass is bounded by DIVERSITY_MARGIN, and that bound is the load-bearing
+part. Breadth cannot be manufactured: ask where the hands go in prayer and the
+corpus has four Hanbali answers and nothing else on qabd, so an unbounded first
+pass spends four of five slots on a Salafi answer about raising the hands, a
+Maliki one about joining prayers, and so on - a page that looks like four schools
+disagreeing when three of them were never asked. A new voice is only worth a slot
+if it is within DIVERSITY_MARGIN of the best hit; otherwise the slot goes back to
+depth, and a single-school answer is reported honestly as a single-school answer.
+
+RELEVANCE
+---------
+top-k always returns k things, however bad the k-th is. ABSTAIN_THRESHOLD only
+guarded the BEST hit, so one strong match licensed four weak ones and each of
+those still got a card and a source badge. `search` now drops any hit that fails
+RELEVANCE_THRESHOLD *and* is not strong lexically (BM25_STRONG_RANK) - both
+signals have to dislike it. That is the cheap half of the filter; the accurate
+half is generate.CardOut.answers_question, where the model has read the document.
+
+HITS ARE COPIES
+---------------
+`score` is a per-query value living on a Doc that the corpus owns and reuses for
+every query, in every session (app.py caches one Index for the whole server). So
+the searchers hand back `dataclasses.replace` copies rather than the corpus
+objects: a second question must not rewrite the scores a first answer is still
+displaying, and two concurrent users must not overwrite each other's.
 """
 
 from __future__ import annotations
@@ -32,24 +62,27 @@ from __future__ import annotations
 import os
 import re
 import sys
+from dataclasses import replace
 
 import numpy as np
 
 from data.raw.config import (
     ABSTAIN_THRESHOLD,
+    BM25_STRONG_RANK,
     CORPUS,
     EMBED_DIMS,
     EMBED_MODEL,
-    FIQH_THRESHOLD,
     LOCAL_EMBED_MODEL,
+    RELEVANCE_THRESHOLD,
     RRF_K,
     TOP_K_ISLAMQA,
-    VECTORS_MULTI,
     VECTORS_SINGLE,
 )
 from data.raw.schema import Doc, load_corpus
 
-MAX_PER_SOURCE = 2      # of TOP_K_ISLAMQA, so no single site owns the results
+MAX_PER_VOICE = 2       # of TOP_K_ISLAMQA, so no one site+school owns the results
+DIVERSITY_MARGIN = 0.08  # cosine a new voice may trail the best hit by, and still
+                         # be worth a slot. See DIVERSITY.
 TOKEN = re.compile(r"[a-z0-9']+")
 
 
@@ -57,25 +90,42 @@ def tokenise(s: str) -> list[str]:
     return TOKEN.findall(s.lower())
 
 
+def voice(doc: Doc) -> tuple[str, str]:
+    """The unit diversity is measured in: who published it, in which school."""
+    return doc.source, doc.orientation
+
+
 class Index:
-    """Loads the corpus and both vector files once, then answers queries."""
+    """Loads the corpus and the vector file once, then answers queries."""
 
     def __init__(self) -> None:
-        docs = load_corpus(CORPUS)
-        self.single = [d for d in docs if not d.is_multi_school]
-        self.multi = [d for d in docs if d.is_multi_school]
+        self.docs = load_corpus(CORPUS)
 
-        self.v_single = np.load(VECTORS_SINGLE) if VECTORS_SINGLE.exists() else None
-        self.v_multi = np.load(VECTORS_MULTI) if VECTORS_MULTI.exists() else None
-        if self.v_single is not None and len(self.v_single) != len(self.single):
+        # The schema still permits multi_school records, but the four-school
+        # rendering path was removed with FiqhQA - one would be indexed here and
+        # then render as a card with an empty body.
+        multi = [d.id for d in self.docs if d.is_multi_school]
+        if multi:
             raise RuntimeError(
-                f"vectors_single has {len(self.v_single)} rows but the corpus has "
-                f"{len(self.single)} single_source docs - re-run embed.py"
+                f"{len(multi)} multi_school doc(s) in the corpus ({multi[:3]}...) but "
+                "the four-school path was removed - see config.SOURCE_META"
+            )
+
+        # Not optional. ABSTAIN_THRESHOLD and RELEVANCE_THRESHOLD are cosine
+        # values, so without vectors every score is 0 and the app abstains on
+        # everything - a silent, total failure that looks like a thin corpus.
+        if not VECTORS_SINGLE.exists():
+            raise RuntimeError(f"missing {VECTORS_SINGLE.name} - run embed.py")
+        self.vectors = np.load(VECTORS_SINGLE)
+        if len(self.vectors) != len(self.docs):
+            raise RuntimeError(
+                f"{VECTORS_SINGLE.name} has {len(self.vectors)} rows but the corpus "
+                f"has {len(self.docs)} docs - re-run embed.py"
             )
 
         from rank_bm25 import BM25Okapi
 
-        self.bm25 = BM25Okapi([tokenise(d.bm25_text) for d in self.single])
+        self.bm25 = BM25Okapi([tokenise(d.bm25_text) for d in self.docs])
         self._embedder = None
 
     # -- query embedding ---------------------------------------------------
@@ -86,7 +136,10 @@ class Index:
         return v / max(float(np.linalg.norm(v)), 1e-9)
 
     def _make_embedder(self):
-        dims = self.v_single.shape[1] if self.v_single is not None else EMBED_DIMS
+        # The stored vectors decide the model, not the environment: an
+        # OPENAI_API_KEY appearing next to a corpus embedded with bge-small must
+        # NOT switch the query side to a different vector space.
+        dims = self.vectors.shape[1]
         if os.getenv("OPENAI_API_KEY") and dims == EMBED_DIMS:
             from openai import OpenAI
 
@@ -106,66 +159,81 @@ class Index:
         return lambda q: model.encode([q], convert_to_numpy=True)[0]
 
     # -- retrieval ---------------------------------------------------------
-    def search_single(self, query: str, k: int = TOP_K_ISLAMQA) -> list[Doc]:
-        """Hybrid cosine + BM25, fused by RRF, then capped per source."""
-        if not self.single:
+    def search(
+        self, query: str, k: int = TOP_K_ISLAMQA, qv: np.ndarray | None = None
+    ) -> list[Doc]:
+        """Hybrid cosine + BM25, fused by RRF, then spread across the voices.
+
+        Results are in FUSED rank order; `score` is the cosine, which is the
+        interpretable number but not the one that decided the ordering, so it is
+        not monotonic down the list.
+        """
+        if not self.docs:
             return []
 
+        if qv is None:
+            qv = self.embed_query(query)
+        cos = self.vectors @ qv
+        vec_rank = np.argsort(-cos)
         bm_rank = np.argsort(-self.bm25.get_scores(tokenise(query)))
-        if self.v_single is not None:
-            cos = self.v_single @ self.embed_query(query)
-            vec_rank = np.argsort(-cos)
-        else:
-            cos, vec_rank = np.zeros(len(self.single)), bm_rank
 
         # RRF: 1/(K + rank). Rank-based, so the two score scales never meet.
-        fused = np.zeros(len(self.single))
+        fused = np.zeros(len(self.docs))
         for rank, i in enumerate(vec_rank[:200]):
             fused[i] += 1.0 / (RRF_K + rank)
         for rank, i in enumerate(bm_rank[:200]):
             fused[i] += 1.0 / (RRF_K + rank)
 
-        out: list[Doc] = []
-        per_source: dict[str, int] = {}
+        # Strong lexical evidence, kept as a set so a rare-term match can survive
+        # a failing cosine. See config.BM25_STRONG_RANK.
+        lexical = set(int(i) for i in bm_rank[:BM25_STRONG_RANK])
+
+        ranked: list[int] = []
         for i in np.argsort(-fused):
             if fused[i] <= 0:
                 break
-            doc = self.single[i]
-            if per_source.get(doc.source, 0) >= MAX_PER_SOURCE:
+            # Neither signal likes it: not semantically close, not a keyword
+            # match either. Carding this would attribute a real scholar's real
+            # fatwa to a question it never addressed.
+            if cos[i] < RELEVANCE_THRESHOLD and int(i) not in lexical:
                 continue
-            per_source[doc.source] = per_source.get(doc.source, 0) + 1
-            doc.score = float(cos[i])       # cosine is the interpretable one
-            out.append(doc)
-            if len(out) == k:
-                break
-        return out
+            ranked.append(int(i))
 
-    def search_multi(self, query: str, k: int = 1) -> list[Doc]:
-        """Plain cosine over the small multi-school index."""
-        if not self.multi or self.v_multi is None:
+        # Pass 1 takes the best hit from each voice that is close enough to the
+        # best hit overall to be worth the slot; pass 2 backfills by rank - see
+        # DIVERSITY. Both walk the same fused order, so the result stays ranked
+        # within each pass; it is only the passes that reorder anything.
+        if not ranked:
             return []
-        cos = self.v_multi @ self.embed_query(query)
-        out = []
-        for i in np.argsort(-cos)[:k]:
-            doc = self.multi[i]
-            doc.score = float(cos[i])
-            out.append(doc)
-        return out
+        # Measured against the top-ranked hit, not the best cosine anywhere in
+        # the list: fusion can leave a very high cosine far down the ranking, and
+        # letting that set the bar quietly excludes voices from the first pass.
+        floor = cos[ranked[0]] - DIVERSITY_MARGIN
+
+        taken: dict[tuple[str, str], int] = {}
+        chosen: list[int] = []
+        for limit, near in ((1, True), (MAX_PER_VOICE, False)):
+            for i in ranked:
+                if len(chosen) == k:
+                    break
+                if near and cos[i] < floor:
+                    continue
+                v = voice(self.docs[i])
+                if taken.get(v, 0) >= limit or i in chosen:
+                    continue
+                taken[v] = taken.get(v, 0) + 1
+                chosen.append(i)
+
+        return [replace(self.docs[i], score=float(cos[i])) for i in chosen]
 
     # -- the decision app.py renders --------------------------------------
     def retrieve(self, query: str) -> dict:
-        """Everything the UI needs, including the coverage and abstain states."""
-        hits = self.search_single(query)
-        panel = self.search_multi(query, k=1)
-        best_panel = panel[0] if panel else None
-
-        show_schools = bool(best_panel and best_panel.score >= FIQH_THRESHOLD)
-        top = max([h.score for h in hits] + [best_panel.score if best_panel else 0.0])
+        """Everything the UI needs, including the abstain state."""
+        hits = self.search(query)
+        top = max([h.score for h in hits] + [0.0])
         return {
             "query": query,
             "hits": hits,
-            "panel": best_panel if show_schools else None,
-            "show_schools": show_schools,
             "abstain": top < ABSTAIN_THRESHOLD,
             "top_score": top,
         }
@@ -178,10 +246,7 @@ if __name__ == "__main__":
     idx = Index()
     for q in sys.argv[1:] or QUERIES:
         r = idx.retrieve(q)
-        state = ("ABSTAIN" if r["abstain"]
-                 else "four-school" if r["show_schools"] else "single-source")
-        print(f"\n=== {q}\n    [{state}] top={r['top_score']:.3f}")
-        if r["panel"]:
-            print(f"    PANEL {r['panel'].score:.3f}  {r['panel'].title[:60]}")
+        state = "ABSTAIN" if r["abstain"] else "answered"
+        print(f"\n=== {q}\n    [{state}] top={r['top_score']:.3f}  {len(r['hits'])} hit(s)")
         for h in r["hits"]:
             print(f"      {h.score:.3f}  {h.orientation:<9} {h.title[:58]}")

@@ -1,15 +1,12 @@
-"""Embed the corpus into two vector indexes.
+"""Embed the corpus into one vector index.
 
     python embed.py            # OpenAI if OPENAI_API_KEY is set, else local
     python embed.py --local    # force the free local model
 
-TWO INDEXES, ON PURPOSE
------------------------
-multi_school records are 121 of ~4,000. In one shared index they would almost
-never win top-k, and the four-school comparison - the headline feature - would
-silently never fire. So they get their own index. Searching 121 vectors costs
-nothing, which means the panel fires whenever there is a decent match regardless
-of what the single-source index returns.
+There used to be a second index for the 121 FiqhQA four-school records, which
+needed their own so they could not be crowded out of top-k by ~3,900
+single-source fatwas. Those records were removed (see config.SOURCE_META), so
+one index over the whole corpus is all that is left to build.
 
 WHAT GETS EMBEDDED
 ------------------
@@ -35,7 +32,6 @@ from data.raw.config import (
     EMBED_DIMS,
     EMBED_MODEL,
     LOCAL_EMBED_MODEL,
-    VECTORS_MULTI,
     VECTORS_SINGLE,
 )
 from data.raw.schema import Doc, load_corpus
@@ -78,22 +74,14 @@ def main(argv: list[str]) -> int:
     print(f"Embedding with {'local ' + LOCAL_EMBED_MODEL if use_local else EMBED_MODEL}")
 
     docs = load_corpus(CORPUS)
-    single = [d for d in docs if not d.is_multi_school]
-    multi = [d for d in docs if d.is_multi_school]
+    print(f"  {len(docs)} docs")
+    vecs = backend([d.embed_text for d in docs])
+    np.save(VECTORS_SINGLE, vecs)
+    print(f"    -> {VECTORS_SINGLE.name}  {vecs.shape}  {vecs.nbytes / 1e6:.1f} MB")
 
-    for name, group, path in (("single_source", single, VECTORS_SINGLE),
-                              ("multi_school", multi, VECTORS_MULTI)):
-        if not group:
-            print(f"  {name}: none, skipped")
-            continue
-        print(f"  {name}: {len(group)} docs")
-        vecs = backend([d.embed_text for d in group])
-        np.save(path, vecs)
-        print(f"    -> {path.name}  {vecs.shape}  {vecs.nbytes / 1e6:.1f} MB")
-
-    # Row order == corpus order within each group. search.py rebuilds the same
-    # split from corpus.json, so nothing needs to be stored alongside.
-    print("\nRow order matches corpus.json filtered by record_type.")
+    # Row order == corpus order. search.py loads the same file in the same
+    # order, so nothing needs to be stored alongside to align them.
+    print("\nRow order matches corpus.json.")
     return 0
 
 

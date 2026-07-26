@@ -231,13 +231,20 @@ class Doc:
 
 @dataclass
 class RulingCard:
-    """One source's or one school's ruling. Never a merged verdict."""
+    """One document's ruling, as that document's author stated it.
+
+    `attribution` names the answering mufti or site - never a madhhab. One fatwa
+    is evidence of what its author holds, not of what a whole school holds, and a
+    card headed 'Hanafi school' claims the second on the strength of the first.
+    A source's madhhab leaning still renders, as the SITE's leaning, next to the
+    link.
+    """
 
     doc_id: str
-    attribution: str   # 'Hanafi school' | 'IslamQA.info (Salafi)'
+    attribution: str   # 'Mufti Ebrahim Desai, AskImam (Darul Iftaa)'
     verdict: str       # one of VERDICTS
-    one_line: str
-    reasoning: str
+    one_line: str      # the ruling itself, one sentence
+    summary: str       # what the fatwa says, for a reader who will not open it
     evidences: list[dict] = field(default_factory=list)  # {type, ref, quote}
     conditions: list[str] = field(default_factory=list)
     unverified_quotes: list[str] = field(default_factory=list)
@@ -249,7 +256,7 @@ class Comparison:
 
     agreement: list[str]
     divergence: list[dict]  # {point, positions: [{who, stance}]}
-    turns_on: str
+    turns_on: str           # the underlying question the disagreement reduces to
 
 
 # ---------------------------------------------------------------------------

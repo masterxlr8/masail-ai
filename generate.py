@@ -4,8 +4,8 @@
     from generate import answer
 
     result = answer("Does touching a woman break wudu?", Index())
-    result.state        # 'abstain' | 'four_school' | 'single_source'
-    result.cards        # list[RulingCard] - one per school or per source
+    result.state        # 'abstain' | 'answered'
+    result.cards        # list[RulingCard] - one per retrieved document
     result.comparison   # Comparison | None
 
 WHAT THIS LAYER IS ALLOWED TO DO
@@ -22,14 +22,24 @@ position no scholar actually holds. So:
     renders (`verify_quotes`), and anything that fails moves to
     `unverified_quotes` rather than being silently dropped or silently shown.
 
-THE THREE GENERATION PATHS (plan.md section 3)
-----------------------------------------------
-  four-school panel  4 cards built DIRECTLY from Doc.positions - no LLM writes
-                     the text, because the source already states each school's
-                     position. One cheap batched call assigns the verdict enum
-                     for colour coding. 1 call total.
-  single-source hits one structured call per Doc, scoped to that Doc. <=5 calls.
-  comparison         one call over the finished cards. 1 call.
+WHO A CARD SPEAKS FOR
+---------------------
+The answering mufti or site, and only them. A card once read "Hanafi school -
+qabd is a Sunnah act", built from a single Hanafi fatwa; that is a claim about
+several centuries of scholarship resting on one page, and madhhabs disagree
+internally all the time. `attribution` is therefore always a name a reader can
+follow to a document - `attribution_for` builds it - and both prompts below
+forbid generalising from one fatwa to a school. The site's leaning is still
+shown, labelled as the site's.
+
+THE TWO GENERATION PATHS
+------------------------
+  source cards  one structured call per Doc, scoped to that Doc. <=5 calls.
+                That call also decides `answers_question`, which is the second
+                half of the relevance filter: search.py drops what is cheaply
+                provable noise, and this drops what only looks relevant until you
+                read it. A false there discards the card.
+  comparison    one call over the finished cards. 1 call.
 
 TEMPERATURE
 -----------
@@ -51,6 +61,7 @@ from dotenv import load_dotenv
 from pydantic import BaseModel, Field, ValidationError
 
 from data.raw.config import (
+    ABSTAIN_THRESHOLD,
     LLM_MAX_TOKENS,
     LLM_MODEL,
     LLM_NO_TEMPERATURE_MODELS,
@@ -113,8 +124,6 @@ Verdict = Literal[
 ]
 assert set(Verdict.__args__) == set(VERDICTS), "Verdict literal drifted from schema.VERDICTS"
 
-SchoolKey = Literal["hanafi", "shafii", "maliki", "hanbali"]
-
 
 class Evidence(BaseModel):
     type: Literal["quran", "hadith", "scholarly"]
@@ -123,27 +132,37 @@ class Evidence(BaseModel):
 
 
 class CardOut(BaseModel):
-    """One document's ruling, as the model reports it."""
+    """One document's ruling, as the model reports it.
 
+    `answers_question` comes FIRST on purpose: it is the relevance gate, and the
+    model should decide whether the document is on topic before it has spent a
+    paragraph arguing that it is. Retrieval's cosine floor only ever saw a title
+    and a question; this field is judged against the document body, which is why
+    it is the one that catches "Playing with and selling Pokemon cards" surfacing
+    on a question about bitcoin.
+    """
+
+    answers_question: bool = Field(
+        description="True only if this document actually addresses the user's question. "
+        "Same broad topic is NOT enough - a fatwa on combining prayers while "
+        "travelling does not answer where to place your hands in prayer. False if "
+        "the document is merely adjacent, or answers a different question about the "
+        "same subject. When genuinely unsure, answer false."
+    )
     verdict: Verdict
     one_line: str = Field(description="The ruling in one sentence, under 25 words.")
-    reasoning: str = Field(description="Why this source rules that way, 2-4 sentences, in its own terms.")
+    summary: str = Field(
+        description="A summary of this fatwa for someone who will not open the "
+        "original: what it was asked, what it rules, the reasoning it gives, and any "
+        "caveat or exception it attaches. 3-5 sentences, plain English, in the "
+        "source's own terms. Write 'this answer' or the source's name - never 'the "
+        "Hanafi school' or 'the madhhab', which one fatwa cannot speak for."
+    )
     evidences: list[Evidence] = Field(default_factory=list, max_length=4)
     conditions: list[str] = Field(
         default_factory=list,
         description="Qualifications the ruling depends on. Empty if the ruling is unconditional.",
     )
-
-
-class SchoolVerdict(BaseModel):
-    school: SchoolKey
-    verdict: Verdict
-
-
-class VerdictBatch(BaseModel):
-    """The one cheap call the four-school path makes: enums only, no prose."""
-
-    verdicts: list[SchoolVerdict]
 
 
 class DivergencePosition(BaseModel):
@@ -171,8 +190,10 @@ class ComparisonOut(BaseModel):
     agreement: list[str] = Field(description="Points every source states. Empty list if none.")
     divergence: list[DivergencePoint]
     turns_on: str = Field(
-        description="The one factual or interpretive question the disagreement reduces to. "
-        "One sentence. If the sources agree, say what they agree on and stop."
+        description="The one factual or interpretive question the disagreement reduces "
+        "to - a definition, a hadith's authenticity, the scope of a condition. Written "
+        "as a plain explanation of why these answers differ, one sentence. If the "
+        "sources agree, say what they agree on and stop."
     )
 
 
@@ -191,12 +212,20 @@ NO_ADJUDICATION = (
     "3. Never write 'the correct view is', 'the stronger opinion', 'the majority is "
     "right', or any equivalent. You are not adjudicating.\n"
     "4. Preserve conditions. A permissible-if-X ruling reported as plain "
-    "'permissible' is a misquotation of a scholar."
+    "'permissible' is a misquotation of a scholar.\n"
+    "5. Attribute to the ANSWERING PARTY, never to a school of law. One fatwa tells "
+    "you what its author holds; it does not tell you what the Hanafi, Shafi'i, Maliki "
+    "or Hanbali school holds, and every madhhab contains internal disagreement. Write "
+    "'this answer holds', 'the mufti holds', or the site's name. Never 'the Hanafi "
+    "school holds', 'the madhhab's position is', or 'according to the Hanbalis'. If "
+    "the document ITSELF reports what a school holds, you may say the document says "
+    "so - that is quoting it, not generalising from it."
 )
 
 CARD_PROMPT = """Document to extract from - this is the ONLY source you may use.
 
-<source>{label} ({orientation})</source>
+<answered_by>{who}</answered_by>
+<site_leaning>{orientation}</site_leaning>
 <title>{title}</title>
 <question>{question}</question>
 <answer>
@@ -205,18 +234,25 @@ CARD_PROMPT = """Document to extract from - this is the ONLY source you may use.
 
 Extract this one document's ruling on the user's question: "{query}"
 
-Pick the verdict enum that this document's own conclusion matches. Use "depends"
-when the document makes the ruling conditional rather than stating one outcome.
-"""
+FIRST decide `answers_question`. This document was returned by a keyword and
+vector search, which retrieves things that merely share vocabulary with the
+question - being about the same broad subject is not the same as answering it.
+If it does not address the question, set answers_question to false; the card is
+then discarded and nothing else you write here is shown, so do not stretch the
+document to fit.
 
-SCHOOL_VERDICT_PROMPT = """Each block below is one school's stated position on: "{query}"
+Then pick the verdict enum that this document's own conclusion matches. Use
+"depends" when the document makes the ruling conditional rather than stating one
+outcome.
 
-{blocks}
+`site_leaning` is the madhhab this SITE generally follows. It is context for you,
+not a claim you may make: this is one fatwa, so write about what this answer says
+and do not attribute its ruling to the school as a whole.
 
-For each school, choose the verdict enum that its own stated position matches.
-Do not rewrite the positions and do not say which school is correct - you are
-only labelling text that already exists, so the UI can colour-code the cards.
-Use "depends" where a school makes the ruling conditional.
+Then write `summary`. The reader will most likely not open the original document,
+so this is what they will actually know about this fatwa - give them its substance
+(what was asked, what it concludes, why, and what it excludes), not a restatement
+of `one_line`.
 """
 
 CONDENSE_PROMPT = """Here is a conversation. Rewrite the LAST user message as a question that
@@ -232,10 +268,14 @@ self-contained, return it unchanged and set is_followup to false. Do not answer 
 it, and do not add topics the user did not raise.
 """
 
-COMPARISON_PROMPT = """Below are finished ruling cards, each already attributed to one source
-or school, on the question: "{query}"
+COMPARISON_PROMPT = """Below are finished ruling cards on the question: "{query}"
 
 {cards}
+
+Each `who` is ONE mufti or ONE site that answered - not a school of law, even
+where the name signals a madhhab. Copy each `who` exactly as given, and never
+rewrite it into "the Hanafi school" or similar; these are individual published
+answers, and a school's full position is not what we retrieved.
 
 Report where they agree and where they diverge.
 
@@ -244,9 +284,10 @@ say which position is stronger, safer, more authoritative, or more widely held.
 A reader must finish this able to state each position accurately - not able to
 say who won.
 
-`turns_on` is the single underlying question the disagreement reduces to (a
-definition, a hadith's authenticity, a condition's scope). If the sources do not
-actually disagree, say what they share and stop.
+`turns_on` explains why these answers differ: name the single underlying question
+the disagreement reduces to (a definition, a hadith's authenticity, a condition's
+scope) in one plain sentence. If the sources do not actually disagree, say what
+they share and stop.
 """
 
 
@@ -332,52 +373,37 @@ def _parse(
 
 
 # ---------------------------------------------------------------------------
-# Path 1 - four-school panel. The source already wrote the positions.
+# Path 1 - one structured call per retrieved document.
 # ---------------------------------------------------------------------------
-def school_cards(doc: Doc, query: str) -> list[RulingCard]:
-    """4 cards from `doc.positions`, with ONE batched call for the verdict enums.
+def attribution_for(doc: Doc) -> str:
+    """Who actually answered: a named mufti or issuing body, plus where it is published.
 
-    The position text is copied through verbatim - no model rewrites it. That is
-    the whole reason the four-school panel is the trustworthy part of the demo:
-    the only thing generated is a six-value enum, and if it is wrong the reader
-    can see the mismatch against the text sitting right next to it.
+    NOT the madhhab. `doc.orientation` says which school a site generally follows,
+    and putting that on the card header - "Hanbali school - ..." - turns one page
+    into the settled position of a legal tradition that argues with itself. The
+    leaning still renders, next to the link, as the site's.
+
+    `scholar` is a person on askimam and islamqa.info and the issuing darul-ifta
+    on islamqa.org, which is the right granularity either way: it is the party a
+    reader would go back to. Falls back to the site when a record has none.
     """
-    stated = doc.stated_positions
-    if not stated:
-        return []
-
-    blocks = "\n\n".join(
-        f"<school key=\"{p.school}\" name=\"{p.school_label}\">\n{p.text}\n</school>"
-        for p in stated
-    )
-    batch: VerdictBatch = _parse(
-        SCHOOL_VERDICT_PROMPT.format(query=query, blocks=blocks), VerdictBatch
-    )
-    by_school = {v.school: v.verdict for v in batch.verdicts}
-
-    return [
-        RulingCard(
-            doc_id=doc.id,
-            attribution=f"{p.school_label} school",
-            verdict=by_school.get(p.school, "depends"),
-            one_line=p.text.strip().split("\n")[0][:200],
-            reasoning=p.text.strip(),      # verbatim from the source
-            evidences=[],
-            conditions=[],
-            unverified_quotes=[],
-        )
-        for p in stated
-    ]
+    who = (doc.scholar or "").strip()
+    if not who or who.lower() in doc.source_label.lower():
+        return doc.source_label
+    return f"{who}, {doc.source_label}"
 
 
-# ---------------------------------------------------------------------------
-# Path 2 - one structured call per single-source hit.
-# ---------------------------------------------------------------------------
-def source_card(doc: Doc, query: str) -> RulingCard:
-    """One card, scoped to one document, with every quote verified against it."""
+def source_card(doc: Doc, query: str) -> RulingCard | None:
+    """One card, scoped to one document, with every quote verified against it.
+
+    Returns None when the model reports the document does not answer the
+    question - the second half of the relevance filter that starts with
+    RELEVANCE_THRESHOLD in search.py. Free, because the call already had to
+    happen; accurate, because unlike the cosine it has read the whole document.
+    """
     out: CardOut = _parse(
         CARD_PROMPT.format(
-            label=doc.source_label,
+            who=attribution_for(doc),
             orientation=doc.orientation,
             title=doc.title,
             question=doc.question,
@@ -386,12 +412,14 @@ def source_card(doc: Doc, query: str) -> RulingCard:
         ),
         CardOut,
     )
+    if not out.answers_question:
+        return None
     card = RulingCard(
         doc_id=doc.id,
-        attribution=f"{doc.source_label} ({doc.orientation})",
+        attribution=attribution_for(doc),
         verdict=out.verdict,
         one_line=out.one_line,
-        reasoning=out.reasoning,
+        summary=out.summary,
         evidences=[e.model_dump() for e in out.evidences],
         conditions=out.conditions,
     )
@@ -401,7 +429,7 @@ def source_card(doc: Doc, query: str) -> RulingCard:
 
 
 # ---------------------------------------------------------------------------
-# Path 3 - the comparison layer.
+# Path 2 - the comparison layer.
 # ---------------------------------------------------------------------------
 def compare(cards: list[RulingCard], query: str) -> Comparison | None:
     """Agreement and divergence across the finished cards. No overall verdict."""
@@ -411,7 +439,7 @@ def compare(cards: list[RulingCard], query: str) -> Comparison | None:
     rendered = "\n\n".join(
         f"<card who=\"{c.attribution}\">\n"
         f"verdict: {c.verdict}\n"
-        f"{c.one_line}\n{c.reasoning}"
+        f"{c.one_line}\n{c.summary}"
         + ("\nconditions: " + "; ".join(c.conditions) if c.conditions else "")
         + "\n</card>"
         for c in cards
@@ -470,10 +498,10 @@ def disambiguate(cards: list[RulingCard]) -> list[RulingCard]:
 
     MAX_PER_SOURCE allows two hits from one site, and two fatwas from the same
     site can genuinely differ (one on interest-bearing mortgages, one on an
-    interest-free variant). Left alone, both cards read "IslamQA.info (Salafi)"
-    and the comparison then lists that name twice with contradictory stances,
-    which looks like the source contradicting itself. Suffixing the fatwa number
-    makes them two documents again.
+    interest-free variant). Left alone, both cards read "Mufti Ebrahim Desai,
+    AskImam" and the comparison then lists that name twice with contradictory
+    stances, which looks like the mufti contradicting himself. Suffixing the fatwa
+    number makes them two documents again.
     """
     counts: dict[str, int] = {}
     for c in cards:
@@ -489,20 +517,31 @@ ABSTAIN_MESSAGE = (
     "to the question to answer from, and answering anyway would mean inventing one."
 )
 
+# The other way to end up with nothing: documents were retrieved and read, and
+# none of them turned out to be about the question. Worth saying differently -
+# "nothing matched" and "what matched was off topic" are different facts about
+# the corpus, and only the second one means retrieval fired and was overruled.
+OFF_TOPIC_MESSAGE = (
+    "I don't have a sourced fatwa on this. The search returned {n} document(s), but "
+    "on reading them none actually answers this question - they only share subject "
+    "matter with it."
+)
+
 
 @dataclass
 class Answer:
-    """Everything app.py renders. Mirrors the three UI states in plan.md."""
+    """Everything app.py renders."""
 
     query: str
-    state: str                      # 'abstain' | 'four_school' | 'single_source'
+    state: str                      # 'abstain' | 'answered'
     cards: list[RulingCard] = field(default_factory=list)
     comparison: Comparison | None = None
-    panel_doc: Doc | None = None    # the multi_school record, if the panel fired
     hits: list[Doc] = field(default_factory=list)
     top_score: float = 0.0
     message: str = ""
+    detail: str = ""                # the caption under `message`, when abstaining
     llm_calls: int = 0
+    discarded: int = 0              # read, then judged off topic. See source_card.
 
     @property
     def unverified(self) -> list[str]:
@@ -547,24 +586,38 @@ def answer(
         return Answer(
             query=query, state="abstain", hits=[], top_score=r["top_score"],
             message=ABSTAIN_MESSAGE,
+            detail=f"Best match scored {r['top_score']:.2f}, below the "
+                   f"{ABSTAIN_THRESHOLD:.2f} threshold. Try rephrasing, or ask about "
+                   "prayer, purity, marriage, or finance.",
         )
 
     cards: list[RulingCard] = []
     calls = 0
 
-    if r["show_schools"] and r["panel"]:
-        say("Reading the four schools' positions...")
-        cards += school_cards(r["panel"], query)
-        calls += 1
-
     hits = r["hits"][:max_source_cards]
+    discarded = 0
     if hits:
-        say(f"Extracting {len(hits)} source rulings...")
+        say(f"Reading {len(hits)} candidate sources...")
         # Independent calls over independent documents - the only reason the
         # generation half is not 5x slower than the retrieval half.
         with cf.ThreadPoolExecutor(max_workers=len(hits)) as pool:
-            cards += list(pool.map(lambda d: source_card(d, query), hits))
+            built = list(pool.map(lambda d: source_card(d, query), hits))
         calls += len(hits)
+        # None = the model read it and said it does not answer the question.
+        kept = [c for c in built if c is not None]
+        discarded = len(built) - len(kept)
+        cards += kept
+
+    # Everything retrieved was read and rejected. Say so rather than rendering an
+    # answer with no cards in it, which reads as a broken page.
+    if not cards:
+        return Answer(
+            query=query, state="abstain", hits=r["hits"], top_score=r["top_score"],
+            message=OFF_TOPIC_MESSAGE.format(n=len(hits)),
+            detail="Nothing was fabricated to fill the gap - the retrieved documents "
+                   "are listed below if you want to judge them yourself.",
+            llm_calls=calls, discarded=discarded,
+        )
 
     disambiguate(cards)
     say("Comparing what they agree and differ on...")
@@ -572,22 +625,30 @@ def answer(
     if comparison is not None:
         calls += 1
 
+    # Only the documents that survived belong in the hit list - the UI reads it
+    # back to resolve each card's source link, and listing the rejects there
+    # would put documents on the page that we just decided were off topic.
+    kept_ids = {c.doc_id for c in cards}
     return Answer(
         query=query,
-        state="four_school" if r["show_schools"] else "single_source",
+        state="answered",
         cards=cards,
         comparison=comparison,
-        panel_doc=r["panel"],
-        hits=r["hits"],
+        hits=[h for h in r["hits"] if h.id in kept_ids],
         top_score=r["top_score"],
         llm_calls=calls,
+        discarded=discarded,
     )
 
 
 # ---------------------------------------------------------------------------
 def render(a: Answer) -> str:
     """Plain-text rendering, for the CLI and the notebook. app.py renders cards."""
-    L = [f"=== {a.query}", f"    [{a.state}] top={a.top_score:.3f}  llm_calls={a.llm_calls}"]
+    L = [
+        f"=== {a.query}",
+        f"    [{a.state}] top={a.top_score:.3f}  llm_calls={a.llm_calls}"
+        f"  discarded={a.discarded}",
+    ]
     if a.state == "abstain":
         L.append(f"    {a.message}")
         return "\n".join(L)
@@ -595,6 +656,7 @@ def render(a: Answer) -> str:
     for c in a.cards:
         L.append(f"\n  -- {c.attribution}  [{c.verdict}]  ({c.doc_id})")
         L.append(f"     {c.one_line}")
+        L.append(f"     {c.summary}")
         for cond in c.conditions:
             L.append(f"     * {cond}")
         for e in c.evidences:

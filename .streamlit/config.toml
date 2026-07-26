@@ -1,0 +1,48 @@
+# Theme for the fatwa reader.
+#
+# Neutral on purpose. Colour carries MEANING in this app - green/red/orange/
+# violet are verdict badges - so the app's own accent has to stay out of that
+# vocabulary. A near-black primary keeps buttons and focus rings from reading as
+# "permissible", which any coloured brand accent would.
+#
+# Sized for reading rather than for dashboards: 15px base and generous heading
+# weights, because the main content is multi-paragraph scholarly prose, not KPIs.
+
+[theme]
+base = "light"
+primaryColor = "#18181B"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#FAFAFA"
+codeBackgroundColor = "#F4F4F5"
+textColor = "#18181B"
+linkColor = "#2563EB"
+borderColor = "#E4E4E7"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "8px"
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+codeFontSize = "0.8rem"
+codeTextColor = "#3F3F46"
+baseFontSize = 15
+baseFontWeight = 400
+headingFontSizes = ["34px", "26px", "19px", "16px", "15px", "14px"]
+headingFontWeights = [700, 600, 600, 600, 600, 600]
+linkUnderline = false
+
+# The verdict palette. These are the badge colours in app.VERDICT, so they are
+# part of the product's meaning - keep them distinguishable and keep them legible
+# on the white card background.
+greenColor = "#15803D"
+redColor = "#B91C1C"
+orangeColor = "#C2410C"
+blueColor = "#1D4ED8"
+violetColor = "#6D28D9"
+yellowColor = "#A16207"
+grayColor = "#71717A"
+
+[theme.sidebar]
+backgroundColor = "#FAFAFA"
+secondaryBackgroundColor = "#F4F4F5"
+borderColor = "#E4E4E7"

@@ -1,5 +1,26 @@
 # Fatwa RAG — Final 8-Hour Build Plan
 
+> **This is the plan as written before the build, kept as a record of intent. Two
+> things below are no longer what the code does.**
+>
+> 1. **FiqhQA and the four-school panel are gone.** All 121 records shared one URL
+>    — the HuggingFace dataset page — so a card's "source" link led to a download
+>    rather than to a fatwa, and none named a scholar. A card reading *"the Hanafi
+>    school holds X"* backed by nothing a reader can open claims an authority this
+>    tool does not have. With it went `FIQH_THRESHOLD`, `search_fiqhqa`, the
+>    second vector index, the coverage badge, and the `show_schools` state. See the
+>    note above `SOURCE_META` in `data/raw/config.py`. The `multi_school` record
+>    type survives in `schema.py` as vocabulary for a future source that can cite
+>    itself per school; `ingest.py` and `search.py` both fail loudly if one appears.
+> 2. **Cards are attributed to people and sites, never to madhhabs.** One fatwa is
+>    evidence of what its author holds, not of what a school holds — madhhabs
+>    disagree internally. Card headers name the answering mufti or darul-ifta
+>    (`generate.attribution_for`); a source's madhhab leaning still shows, labelled
+>    as the *site's* leaning, next to the link.
+>
+> Everything else — the no-merged-verdict rule, one card per source, quote
+> verification, the abstain state — held.
+
 ## Context
 
 One-day AI-native hackathon, Islamic theme, team of 2, 8 hours. Empty starting directory

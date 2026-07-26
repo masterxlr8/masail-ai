@@ -13,15 +13,13 @@ RAW = DATA / "raw"
 CORPUS = DATA / "corpus.json"
 SCHEMA_DOC = RAW / "schema.json"
 
-# Retrieval keeps two indexes because the multi-school records are a tiny
-# minority and would never win top-k against 15k single-source fatwas.
+# One index over the whole corpus. There used to be a second one for the FiqhQA
+# four-school records; see the note under SOURCE_META for why they are gone.
 VECTORS_SINGLE = DATA / "vectors_single.npy"
-VECTORS_MULTI = DATA / "vectors_multi.npy"
 
 # --- upstream sources ---------------------------------------------------------
 HF_PARQUET = {
     "islamqa": "https://huggingface.co/api/datasets/kingkaung/english_islamqainfo/parquet/default/train/0.parquet",
-    "fiqhqa": "https://huggingface.co/api/datasets/MBZUAI/FiqhQA/parquet/english/train/0.parquet",
 }
 
 # Controlled vocabulary. `orientation` is shown on every card, so it must be a
@@ -33,12 +31,21 @@ ORIENTATIONS = [
     "Shafi'i",
     "Maliki",
     "Hanbali",
-    "Four Sunni schools",
     "Unspecified",
 ]
 
 # Register every source here - scraped ones included. `orientation` is shown on
 # every card; we never present a single-madhhab source as neutral.
+#
+# REMOVED: fiqhqa (MBZUAI), 121 multi_school records that were the four-school
+# comparison layer. They failed the standard every other source here meets: all
+# 121 shared ONE url - the HuggingFace dataset page - so the "source" link on a
+# card led to a download, not to a fatwa. No named scholar, no citable original,
+# licence "Research benchmark". A card reading "the Hanafi school holds X" with
+# nothing behind it a reader can check is exactly the authority this tool is not
+# entitled to claim, so the records are out rather than dressed up. The
+# multi_school record type survives in schema.py for a future source that can
+# cite itself properly.
 SOURCE_META = {
     "islamqa": {
         "source_label": "IslamQA.info",
@@ -46,13 +53,6 @@ SOURCE_META = {
         "orientation": "Salafi",
         "scholar": "Muhammad Salih al-Munajjid and team",
         "license": "CC-BY-NC-4.0",
-    },
-    "fiqhqa": {
-        "source_label": "FiqhQA (MBZUAI)",
-        "source_url": "https://huggingface.co/datasets/MBZUAI/FiqhQA",
-        "orientation": "Four Sunni schools",
-        "scholar": None,
-        "license": "Research benchmark",
     },
     # --- scraped sources (see scrape.py) ---
     "islamqaorg": {
@@ -73,16 +73,6 @@ SOURCE_META = {
         "license": "Scraped - non-commercial research use",
     },
 }
-
-# FiqhQA has no per-row URL; link back to the dataset itself.
-FIQHQA_URL = "https://huggingface.co/datasets/MBZUAI/FiqhQA"
-
-SCHOOLS = [
-    ("hanafi", "Hanafi", "hanafi_ans"),
-    ("shafii", "Shafi'i", "shafeii_ans"),
-    ("maliki", "Maliki", "maliki_ans"),
-    ("hanbali", "Hanbali", "hanbali_ans"),
-]
 
 # --- cleaning -----------------------------------------------------------------
 # Category labels render on card badges, so source-side typos are visible.
@@ -121,11 +111,11 @@ SCRAPED = {
     "askimam": RAW / "askimam.json",
 }
 
-# Total corpus target ~4,000. IslamQA.info contributes ~1,589 and FiqhQA 121, so
-# the two scrapes make up the balance - and shift the corpus off its Salafi
-# centre of gravity, which is the point.
-# 1589 islamqa + 121 fiqhqa + these two = 4000 exactly. islamqa.org lands 3 short
-# of its quota (dead urls in the sitemap), so askimam carries the remainder.
+# IslamQA.info contributes ~1,589; the two scrapes make up the balance - and
+# shift the corpus off its Salafi centre of gravity, which is the point.
+# 1589 islamqa + these two = 3,879, the corpus as it stands since FiqhQA's 121
+# were dropped. islamqa.org lands 3 short of its quota (dead urls in the
+# sitemap), so askimam carries the remainder.
 SCRAPE_TARGETS = {"islamqaorg": 1290, "askimam": 1003}
 
 SCRAPE_DELAY = 0.34            # seconds between requests, per site. Be a good guest.
@@ -160,8 +150,25 @@ RRF_K = 60                     # reciprocal rank fusion constant
 # below the noise floor: every demo query fired the four-school panel and nothing
 # ever abstained. Measured on data/raw/demo_queries.py, the separating windows
 # are (0.710, 0.738] and (0.710, 0.784]; these values sit inside both.
-FIQH_THRESHOLD = 0.72          # below this, the four-school panel does not fire
 ABSTAIN_THRESHOLD = 0.75       # below this, refuse to answer at all
+
+# Per-hit relevance floor. ABSTAIN_THRESHOLD only ever looked at the BEST hit, so
+# a question with one strong match dragged four weak ones along with it and every
+# one of them got a card, a citation and a source badge - "Can You Pray in a
+# Moving Car?" rendered as a source on where to place your hands, and "Playing
+# with and selling Pokemon cards" on bitcoin. Both scored ~0.70, i.e. inside the
+# 0.60-0.71 band bge-small gives UNRELATED pairs. This is stage one of two: it
+# drops the documents that are cheap to prove irrelevant, before they cost an
+# LLM call. Stage two is CardOut.answers_question in generate.py, where the model
+# reads the full document and makes the actual judgement.
+RELEVANCE_THRESHOLD = 0.72
+
+# The escape hatch that keeps hybrid search hybrid. A rare-term match (riba,
+# mudarabah, istihada) is exactly the case where BM25 is right and the embedding
+# is weak, so a hit BM25 ranks this highly survives a failing cosine and is left
+# for the LLM to judge. Without this, the cosine floor quietly turns the system
+# back into pure vector search.
+BM25_STRONG_RANK = 5
 
 # --- generation ---------------------------------------------------------------
 # Matches test.py, the connection smoke test. One line to change if you move to

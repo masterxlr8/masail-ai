@@ -1,7 +1,7 @@
 """Collate every source into ONE common corpus: data/corpus.json
 
     python ingest.py                  # all registered sources
-    python ingest.py islamqa fiqhqa   # only these
+    python ingest.py islamqa askimam  # only these
     python ingest.py --full           # ignore ISLAMQA_SAMPLE_FRAC, take all 15,296
 
 ADDING A SCRAPED SOURCE
@@ -26,9 +26,9 @@ IslamQA  19,052 rows -> 15,296 unique fatwas. 3,256 URLs are cross-listed under
          prefix, 100% of answers a 'Praise be to Allah.' prefix (3 doubled),
          15,035 rows contain non-breaking spaces, 7 rows are stubs.
          Then sampled to ISLAMQA_SAMPLE_FRAC, stratified by topic.
-FiqhQA   121 rows, zero nulls, never sampled - it is the comparison layer and
-         every row counts. 8 cells across the four schools state the school has
-         no recorded opinion - flagged via has_opinion, not silently shown.
+
+FiqhQA (121 four-school rows) was removed - see the note above SOURCE_META in
+config.py. Every source here now carries a per-fatwa URL a reader can open.
 """
 
 from __future__ import annotations
@@ -45,19 +45,16 @@ from data.raw.config import (
     CATEGORY_FIXES,
     CORPUS,
     DATA,
-    FIQHQA_URL,
     HF_PARQUET,
     ISLAMQA_SAMPLE_FRAC,
     MIN_ANSWER_CHARS,
     RAW,
     SAMPLE_PINS,
     SAMPLE_SEED,
-    SCHOOLS,
     SCRAPED,
     SOURCE_META,
 )
 from data.raw.schema import (
-    MULTI_SCHOOL,
     SINGLE_SOURCE,
     Doc,
     Position,
@@ -67,7 +64,6 @@ from data.raw.schema import (
     validate_docs,
 )
 
-NO_OPINION = re.compile(r"does not have an opinion on the topic", re.I)
 TODAY = date.today().isoformat()
 
 
@@ -224,35 +220,6 @@ def adapt_islamqa(frac: float = ISLAMQA_SAMPLE_FRAC) -> list[Doc]:
     return docs
 
 
-def adapt_fiqhqa() -> list[Doc]:
-    """Never sampled: 121 rows IS the four-school comparison layer."""
-    df = _load_parquet("fiqhqa")
-    docs, flagged = [], 0
-
-    for i, r in enumerate(df.itertuples(index=False)):
-        positions = []
-        for key, label, col in SCHOOLS:
-            text = clean_text(getattr(r, col) or "")
-            has_opinion = bool(text) and not NO_OPINION.search(text)
-            flagged += not has_opinion
-            positions.append(Position(key, label, text, has_opinion))
-
-        docs.append(
-            make_doc(
-                "fiqhqa", i,
-                title=r.title_en, question=r.question_en, answer=r.statement_en,
-                categories=[clean_text(r.Category)], url=FIQHQA_URL,
-                record_type=MULTI_SCHOOL,
-                positions=positions,
-                answer_arabic=(r.statement_original or "").strip() or None,
-            )
-        )
-
-    print(f"  fiqhqa    {len(df):>6} rows -> {len(docs):>6} docs "
-          f"({flagged} school cells flagged 'no opinion')")
-    return docs
-
-
 def adapt_askimam_stub() -> list[Doc]:
     """TEMPLATE for a scraped source - not registered yet.
 
@@ -299,7 +266,6 @@ def adapt_scraped(source: str):
 
 ADAPTERS = {
     "islamqa": adapt_islamqa,
-    "fiqhqa": adapt_fiqhqa,
     "islamqaorg": adapt_scraped("islamqaorg"),
     "askimam": adapt_scraped("askimam"),
 }
@@ -334,10 +300,18 @@ def main(argv: list[str]) -> int:
         print(f"  note: {len(dupes)} content_hash group(s) share identical text "
               f"across ids - same fatwa republished, review before scaling up")
 
-    save_corpus(docs, CORPUS)
+    # search.py indexes the corpus as one flat list, so a multi_school record
+    # would sit in it unrenderable. The schema still allows the type; nothing
+    # currently emits it, and this is where that would stop being true quietly.
     n_multi = sum(d.is_multi_school for d in docs)
-    print(f"\nWrote {CORPUS} - {len(docs)} docs "
-          f"({len(docs) - n_multi} single_source, {n_multi} multi_school)")
+    if n_multi:
+        print(f"\n{n_multi} multi_school doc(s) present, but the four-school "
+              "rendering path was removed - see config.SOURCE_META. Either drop "
+              "them or restore that path before shipping.")
+        return 1
+
+    save_corpus(docs, CORPUS)
+    print(f"\nWrote {CORPUS} - {len(docs)} docs")
     return 0
 
 

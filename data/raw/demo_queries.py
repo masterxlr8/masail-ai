@@ -3,37 +3,55 @@
 `python demo_queries.py` re-checks that each expected doc is still present -
 run it after any change to sampling, cleaning or SAMPLE_PINS.
 
-Chosen so the demo shows all three states: the four-school panel firing on a
-genuine classical split, single-source contemporary answers with an orientation
-badge, and a clean abstain.
+Chosen so the demo shows both states: attributed answers that genuinely disagree
+across orientations, and a clean abstain.
+
+These used to be split into FOUR_SCHOOL and SINGLE_SOURCE, back when 121 FiqhQA
+records supplied all four madhhabs' positions from one row. Those records were
+removed (see config.SOURCE_META), so the classical splits are now demonstrated
+the same way as everything else - several sites of different leanings answering
+the same question, each under its own name.
 """
 
 from __future__ import annotations
 
-FOUR_SCHOOL = [
+CLASSICAL_SPLITS = [
     {
         "query": "Does touching a woman break wudu?",
-        "expect_doc": "fiqhqa:21",
-        "why": "CENTREPIECE. Agreement='Disagreement'. The canonical split - "
-               "Hanafi no, Shafi'i yes, Maliki/Hanbali with desire. Easy to explain.",
+        "why": "CENTREPIECE. The canonical split - Hanafi no, Shafi'i yes, "
+               "Maliki/Hanbali with desire. Should surface sites of several "
+               "leanings disagreeing, each attributed to its own mufti.",
+    },
+    {
+        "query": "Is it permissible to eat seafood other than fish?",
+        "why": "The best cross-madhhab demo in the corpus. Hanafi (AskImam) restricts "
+               "halal sea life to fish on a hadith about carrion; Shafi'i and "
+               "IslamQA.info permit all of it. Three schools, three cards, one real "
+               "disagreement - and everyday enough that a non-specialist sees it.",
+    },
+    {
+        "query": "Is it allowed to combine two prayers when travelling?",
+        "why": "Retrieves all five voices - Hanafi, Shafi'i, Hanbali, Maliki, "
+               "IslamQA.info - which is the widest spread any query gets.",
     },
     {
         "query": "Where do you place your hands in prayer?",
-        "expect_doc": "fiqhqa:1",
-        "why": "Qabd. Disagreement, and visually obvious to a non-specialist judge.",
+        "why": "Qabd. Kept deliberately as the counter-example: the corpus has four "
+               "Hanbali answers on qabd and nothing else, so this one SHOULD come "
+               "back single-school. If it ever renders four madhhabs, the diversity "
+               "pass has started manufacturing breadth - see search.DIVERSITY.",
     },
     {
         "query": "Does a divorce pronounced during menstruation count?",
-        "expect_doc": "fiqhqa:48",
-        "why": "Disagreement, Marriage category - shows the panel is not just Purity.",
+        "why": "Disagreement in the Marriage category - shows the split is not just Purity.",
     },
 ]
 
-SINGLE_SOURCE = [
+CONTEMPORARY = [
     {
         "query": "Is a conventional mortgage permissible?",
-        "why": "32 fatwas in corpus. Contemporary - FiqhQA cannot cover it, so the "
-               "coverage badge must read 'single-source (Salafi orientation)'.",
+        "why": "32 fatwas in corpus. Contemporary - no classical text covers it, so "
+               "every card here is a named modern mufti.",
     },
     {
         "query": "What is the ruling on buying and selling bitcoin?",
@@ -55,7 +73,7 @@ ABSTAIN = [
     },
 ]
 
-ALL = FOUR_SCHOOL + SINGLE_SOURCE + ABSTAIN
+ALL = CLASSICAL_SPLITS + CONTEMPORARY + ABSTAIN
 QUERIES = [q["query"] for q in ALL]
 
 
