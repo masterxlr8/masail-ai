@@ -1,0 +1,29 @@
+
+askimam: have 0, target 1000
+  api: 24865 fatwas across 995 pages
+    50/1000
+    100/1000
+    150/1000
+    200/1000
+    250/1000
+    300/1000
+    350/1000
+    400/1000
+    450/1000
+    500/1000
+    550/1000
+    600/1000
+    650/1000
+    700/1000
+    742/1000 done
+  728 validation error(s), NOT written:
+    askimam:16038: duplicate id
+    askimam:15523: duplicate id
+    askimam:9666: duplicate id
+    askimam:330: duplicate id
+    askimam:22239: duplicate id
+    askimam:15572: duplicate id
+    askimam:19166: duplicate id
+    askimam:18351: duplicate id
+    askimam:18106: duplicate id
+    askimam:24068: duplicate id

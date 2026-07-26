@@ -1,0 +1,273 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fatwa RAG - common corpus record",
+  "description": "Every source, bulk dataset or scraped site, collapses into this one shape. data/corpus.json is a JSON array of these objects. To add a scraped source: (1) register it in SOURCE_META in config.py, (2) write an adapter in ingest.py that builds records through make_doc(), (3) add it to ADAPTERS. Nothing downstream changes. make_doc() computes id, native_id, content_hash, provenance and retrieved_at for you, so an adapter only supplies title, question, answer, categories and url. validate_docs() then fails the ingest loudly if any field is missing or out of vocabulary.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": [
+      "id", "source", "native_id", "content_hash", "source_label", "source_url",
+      "record_type", "orientation", "url", "license", "language", "retrieved_at",
+      "title", "question", "answer", "categories"
+    ],
+    "additionalProperties": false,
+    "properties": {
+
+      "id": {
+        "type": "string",
+        "description": "Globally unique, always '<source>:<native_id>'. Asserted unique at ingest.",
+        "examples": ["islamqa:145290", "fiqhqa:0", "askimam:41823"]
+      },
+      "source": {
+        "type": "string",
+        "description": "Short machine key. Must exist in SOURCE_META in config.py.",
+        "examples": ["islamqa", "fiqhqa", "askimam", "daruliftaa"]
+      },
+      "native_id": {
+        "type": "string",
+        "description": "The source's own identifier, stored separately from `id` so a scraper can resume, diff or re-fetch a page without string-splitting. Always a string, even when the site uses integers.",
+        "examples": ["145290", "0", "41823"]
+      },
+      "content_hash": {
+        "type": "string",
+        "description": "SHA1 (first 16 hex chars) of case- and whitespace-normalised title+question+answer. THE field that makes re-scraping safe: same hash means the page is unchanged so skip it; a changed hash means the fatwa was edited; the same hash under two different ids means the same fatwa republished on two sites, which happens constantly between Hanafi darul-iftas. Computed by make_doc, never supplied.",
+        "pattern": "^[0-9a-f]{16}$"
+      },
+      "source_label": {
+        "type": "string",
+        "description": "Human-readable name shown on the card badge.",
+        "examples": ["IslamQA.info", "AskImam (Darul Iftaa)"]
+      },
+      "source_url": {
+        "type": "string",
+        "description": "Site root, for attribution. Distinct from `url`, which points at this one fatwa."
+      },
+
+      "record_type": {
+        "enum": ["single_source", "multi_school"],
+        "description": "THE ONLY REAL BRANCH IN THE SYSTEM. 'single_source' = one scholar or site answering, read `answer`. 'multi_school' = several schools compared inside one record, read `positions`. Retrieval, storage and badging are otherwise identical."
+      },
+      "orientation": {
+        "enum": ["Salafi", "Hanafi", "Shafi'i", "Maliki", "Hanbali", "Four Sunni schools", "Unspecified"],
+        "description": "Fixed vocabulary, mirrored in config.ORIENTATIONS. Shown on every card - we never present a single-madhhab source as neutral. Enumerated rather than free text so a scraper cannot silently split one badge into 'Salafi' / 'salafi' / 'Salafi-leaning'. A new site means adding its orientation to config.ORIENTATIONS first."
+      },
+      "madhhab": {
+        "type": ["string", "null"],
+        "enum": ["hanafi", "shafii", "maliki", "hanbali", null],
+        "description": "Set when a single_source record has a known school. Null for multi_school records, which use `positions`, and for sources with no declared school."
+      },
+      "scholar": {
+        "type": ["string", "null"],
+        "description": "Answering scholar or mufti where known. Defaults from SOURCE_META.",
+        "examples": ["Mufti Ebrahim Desai", null]
+      },
+
+      "url": {
+        "type": "string",
+        "description": "Canonical link to THIS fatwa. Every rendered card links here - no uncited claim is displayed."
+      },
+      "license": {
+        "type": "string",
+        "description": "Carried per record so mixed-licence corpora stay auditable.",
+        "examples": ["CC-BY-NC-4.0", "Research benchmark", "Scraped - non-commercial research use"]
+      },
+      "language": {
+        "type": "string",
+        "default": "en",
+        "description": "ISO code of `question` / `answer`."
+      },
+      "retrieved_at": {
+        "type": "string",
+        "description": "ISO date WE snapshotted the source. Fatwa sites change; this dates our copy of the claim."
+      },
+      "date_published": {
+        "type": ["string", "null"],
+        "description": "ISO date the SOURCE published the fatwa, where the site exposes it. Null for both bulk datasets. Worth capturing when scraping: a 2003 ruling on banking and a 2023 one are different evidence.",
+        "examples": ["2011-04-18", null]
+      },
+
+      "title": { "type": "string", "description": "Short headline for the fatwa." },
+      "question": {
+        "type": "string",
+        "description": "The questioner's text, boilerplate prefixes stripped."
+      },
+      "answer": {
+        "type": "string",
+        "description": "single_source: the full fatwa body, at least MIN_ANSWER_CHARS long. multi_school: the summary statement across schools."
+      },
+      "question_arabic": {
+        "type": ["string", "null"],
+        "description": "Original-language question, where the English is a translation. Null when the source is natively English."
+      },
+      "answer_arabic": {
+        "type": ["string", "null"],
+        "description": "Original-language anchor text. For FiqhQA this is the authoritative field - the per-school English is a structured summary of it."
+      },
+      "categories": {
+        "type": "array",
+        "items": { "type": "string" },
+        "description": "ALWAYS a list, never a string. IslamQA cross-lists one fatwa under several topics; deduping by URL merges those labels rather than discarding them. Single-topic sources get a one-element list. Also the stratification key for sampling.",
+        "examples": [["Abandoning or neglecting salaat", "Making up missed prayers"], ["Purity"]]
+      },
+
+      "positions": {
+        "type": ["array", "null"],
+        "description": "multi_school only; null otherwise, and validation rejects a single_source record that carries them. Exactly four entries in SCHOOL_KEYS order, INCLUDING schools with no recorded opinion, so absence is explicit rather than silent.",
+        "minItems": 4,
+        "maxItems": 4,
+        "items": {
+          "type": "object",
+          "required": ["school", "school_label", "text", "has_opinion"],
+          "additionalProperties": false,
+          "properties": {
+            "school": { "enum": ["hanafi", "shafii", "maliki", "hanbali"] },
+            "school_label": { "type": "string", "examples": ["Hanafi", "Shafi'i"] },
+            "text": { "type": "string", "description": "That school's stance." },
+            "has_opinion": {
+              "type": "boolean",
+              "description": "False where the source states the school has no recorded view. Render as 'no recorded position', never as a ruling."
+            }
+          }
+        }
+      }
+    }
+  },
+
+  "designRules": {
+    "oneBranch": "record_type is the only thing any consumer switches on. single_source reads `answer`; multi_school reads `positions`. Retrieval, badging and storage are identical either way.",
+    "noSourceSpecificFields": "Every field means the same thing for every source, or it does not belong. This is what makes the corpus mergeable across four sources today and a fifth tomorrow without touching embed.py, search.py or app.py. WHAT THIS RULE REMOVED: FiqhQA's `Agreement` column (Agreement/Disagreement). It was meaningful for 121 records and null for the other ~3,900 - a per-source annotation wearing a common-schema costume. It still exists in data/raw/fiqhqa.parquet and eval.py joins it back by native_id when scoring the comparison layer, so nothing was lost except the pollution.",
+    "derivedNotStored": "Retrieval text is computed, never persisted - see derivedFields. Storing it doubled the corpus file. A scraped adapter cannot get these wrong because it never supplies them.",
+    "controlledVocabularies": "orientation and madhhab are enums, not free text, so a scraper cannot silently split one UI badge into three spellings.",
+    "validationAtIngest": "schema.py validate_docs() runs at the end of every ingest AND every scrape, and fails the run naming the offending id and field. A missing url breaks the build, not the demo."
+  },
+
+  "derivedFields": {
+    "description": "NOT stored in corpus.json. Computed as properties on Doc (schema.py) because they are pure functions of the content - persisting them doubled the file, bm25_text alone being 46% of it. A scraped adapter never supplies these, so it cannot get them wrong.",
+    "embed_text": "title + question. Deliberately excludes the answer: user queries are questions, and question-to-question similarity is far stronger than question-to-answer.",
+    "bm25_text": "title + question + answer + every stated school position. Carries the substance so rare domain terms - riba, masah, mudarabah, istihada - stay findable by keyword, which embeddings handle poorly.",
+    "stated_positions": "positions where has_opinion is true.",
+    "is_multi_school": "record_type == 'multi_school'.",
+    "llm_context": "answer truncated to MAX_ANSWER_CHARS_FOR_LLM at a word boundary."
+  },
+
+  "sampling": {
+    "description": "IslamQA is 15,296 unique fatwas after cleaning - more than a one-day demo needs, and it would dominate every other source in the corpus. config.ISLAMQA_SAMPLE_FRAC takes a stratified 10%: proportional within each of the 266 topics with a floor of one, seeded at SAMPLE_SEED=42. Stratifying rather than sampling at random keeps the topic mix identical to the full corpus and guarantees no topic disappears. FiqhQA is never sampled - its 121 rows ARE the four-school comparison layer. Set ISLAMQA_SAMPLE_FRAC=1.0, or run `python ingest.py --full`, to build the whole thing; nothing else changes.",
+    "pins": "Stratification protects topic coverage but is blind to what a specific demo query needs. There is exactly ONE bitcoin fatwa in all 15,296, so a 10% sample dropped it. config.SAMPLE_PINS is a list of regexes; any fatwa whose text matches is kept regardless of the sample, currently rescuing 58 docs on finance terms. Add a term whenever a demo query turns out to have thin coverage.",
+    "balance": "For the SCRAPED sources the goal is the opposite of preserving the mix - the mix is the bias. islamqa.org holds 91,580 Hanafi URLs against 182 Hanbali, so proportional sampling would rebuild exactly what we are correcting. scrape.py's balanced_quota() fills the smallest madhhab pools to exhaustion first and splits the remainder evenly, so Hanbali and Maliki come in whole and Hanafi/Shafi'i are sampled down to meet them."
+  },
+
+  "examples": [
+    [
+      {
+        "id": "islamqa:145290",
+        "source": "islamqa",
+        "native_id": "145290",
+        "content_hash": "3f9c1a7be40d25aa",
+        "source_label": "IslamQA.info",
+        "source_url": "https://islamqa.info",
+        "record_type": "single_source",
+        "orientation": "Salafi",
+        "madhhab": null,
+        "scholar": "Muhammad Salih al-Munajjid and team",
+        "url": "https://islamqa.info/en/answers/145290/...",
+        "license": "CC-BY-NC-4.0",
+        "language": "en",
+        "retrieved_at": "2026-07-26",
+        "date_published": null,
+        "title": "She stopped praying when she was sick, then she died",
+        "question": "My mother died, and she owed two months' prayers ...",
+        "answer": "Firstly: Prayer is one of the greatest pillars of Islam ...",
+        "question_arabic": null,
+        "answer_arabic": null,
+        "categories": ["Abandoning or neglecting salaat", "Making up missed prayers"],
+        "positions": null
+      },
+      {
+        "id": "fiqhqa:0",
+        "source": "fiqhqa",
+        "native_id": "0",
+        "content_hash": "c81e728d9d4c2f63",
+        "source_label": "FiqhQA (MBZUAI)",
+        "source_url": "https://huggingface.co/datasets/MBZUAI/FiqhQA",
+        "record_type": "multi_school",
+        "orientation": "Four Sunni schools",
+        "madhhab": null,
+        "scholar": null,
+        "url": "https://huggingface.co/datasets/MBZUAI/FiqhQA",
+        "license": "Research benchmark",
+        "language": "en",
+        "retrieved_at": "2026-07-26",
+        "date_published": null,
+        "title": "Silent and Audible Recitation of 'Amin'",
+        "question": "What is the ruling on saying \"Amin\" during a silent prayer?",
+        "answer": "There is no disagreement among the four schools of thought ...",
+        "question_arabic": null,
+        "answer_arabic": "لَا خِلاَفَ بَيْنَ الْمَذَاهِبِ الأَْرْبَعَةِ ...",
+        "categories": ["Prayer"],
+        "positions": [
+          { "school": "hanafi", "school_label": "Hanafi", "text": "The Hanafi school states that saying \"Amin\" quietly is sunnah ...", "has_opinion": true },
+          { "school": "shafii", "school_label": "Shafi'i", "text": "According to the Shafeii school, it is sunnah ...", "has_opinion": true },
+          { "school": "maliki", "school_label": "Maliki", "text": "In the Maliki school, saying \"Amin\" quietly is considered sunnah ...", "has_opinion": true },
+          { "school": "hanbali", "school_label": "Hanbali", "text": "The Hanbali school also holds that saying Amin quietly is sunnah ...", "has_opinion": true }
+        ]
+      },
+      {
+        "id": "askimam:41823",
+        "source": "askimam",
+        "native_id": "41823",
+        "content_hash": "9b74c9897bac770f",
+        "source_label": "AskImam (Darul Iftaa)",
+        "source_url": "https://askimam.org",
+        "record_type": "single_source",
+        "orientation": "Hanafi",
+        "madhhab": "hanafi",
+        "scholar": "Mufti Ebrahim Desai",
+        "url": "https://www.askimam.org/public/question_detail/41823",
+        "license": "Scraped - non-commercial research use",
+        "language": "en",
+        "retrieved_at": "2026-07-26",
+        "date_published": "2018-03-11",
+        "title": "Scraped via the askimam.org Django API - see scrape.py",
+        "question": "The questioner's text, basmala and salaam boilerplate stripped ...",
+        "answer": "The mufti's response ...",
+        "question_arabic": null,
+        "answer_arabic": null,
+        "categories": ["Business & Trade"],
+        "positions": null
+      },
+      {
+        "id": "islamqaorg:271036",
+        "source": "islamqaorg",
+        "native_id": "271036",
+        "content_hash": "5d41402abc4b2a76",
+        "source_label": "IslamQA.org",
+        "source_url": "https://islamqa.org",
+        "record_type": "single_source",
+        "orientation": "Maliki",
+        "madhhab": "maliki",
+        "scholar": "Shaykh Amjad Rasheed (Binbayyah)",
+        "url": "https://islamqa.org/maliki/binbayyah/271036/example-slug/",
+        "license": "Scraped - non-commercial research use",
+        "language": "en",
+        "retrieved_at": "2026-07-26",
+        "date_published": "2019-02-04",
+        "title": "Aggregator record - orientation is PER RECORD here",
+        "question": "islamqa.org spans ~40 darul-iftas across all four madhhabs, and the URL path carries both (/maliki/binbayyah/271036/). Unlike every other source its orientation varies row by row, so make_doc takes an orientation override for exactly this case.",
+        "answer": "The issuing institution's response ...",
+        "question_arabic": null,
+        "answer_arabic": null,
+        "categories": ["Binbayyah"],
+        "positions": null
+      }
+    ]
+  ],
+
+  "sources": {
+    "description": "Four sources, one shape. The corpus was 93% IslamQA.info (Salafi); the two scrapes exist to correct that.",
+    "islamqa": "kingkaung/english_islamqainfo on HuggingFace. 19,052 rows -> 15,296 unique -> ~1,589 after a stratified 10% sample plus pins. Salafi. CC-BY-NC-4.0.",
+    "fiqhqa": "MBZUAI/FiqhQA, english config. 121 rows, never sampled - the only multi_school source, and the four-school comparison layer.",
+    "islamqaorg": "SCRAPED from islamqa.org. WordPress; wp-json is 401 so scrape.py walks sitemap.xml -> 98,637 URLs. An aggregator over ~40 darul-iftas with madhhab AND institution in the URL path, giving all four Sunni schools labelled per record. Sampled BALANCED not proportional (see sampling.balance).",
+    "askimam": "SCRAPED from askimam.org. React SPA over a Django REST API at askimam.org:8000; list /api/v1/fatwas/fatwas/?page=N (24,865 total), detail /api/v1/fatwas/fatwas/<id>/. Uniformly Hanafi, Mufti Ebrahim Desai. Pages sampled evenly across the full range so the corpus spans the 2000s-2020s rather than only recent fatwas.",
+    "note": "islamqa.org republishes askimam under /hanafi/askimam/ (20,386 URLs). Those are skipped there since askimam.org is scraped directly; content_hash would catch any that slip through."
+  }
+}

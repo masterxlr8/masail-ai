@@ -1,0 +1,15 @@
+# Runtime. Install with: pip install -r requirements.txt
+streamlit>=1.44        # st.chat_message / st.status / :colour-background[] markdown
+anthropic>=0.120       # client.messages.parse() for structured outputs
+pydantic>=2
+numpy
+rank-bm25
+python-dotenv
+
+# Local embedding backend (no OpenAI key needed). torch is the heavy one; on
+# Streamlit Cloud install the CPU wheel to stay inside the memory limit.
+sentence-transformers>=5
+torch
+
+# Optional - only used if OPENAI_API_KEY is set and EMBED_DIMS matches.
+# openai

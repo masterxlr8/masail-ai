@@ -1,0 +1,24 @@
+# --- secrets -----------------------------------------------------------------
+# The Anthropic key lives here and NOWHERE else in the tree. On Streamlit Cloud
+# it comes from the secrets dashboard instead.
+.env
+.streamlit/secrets.toml
+
+# --- python -------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+.ipynb_checkpoints/
+
+# --- generated artifacts ------------------------------------------------------
+# Rebuildable from corpus.json with `python embed.py --local` (~2 min).
+.claude/
+
+data/raw/_alg_raw.html
+data/raw/_alg_text.txt
+data/raw/askimam.json
+data/raw/fiqhqa.parquet
+data/raw/islamqaorg_urls.txt
+data/raw/islamqa.parquet
+data/raw/islamqaorg.json
+data/raw/scrape_islamqaorg.log
