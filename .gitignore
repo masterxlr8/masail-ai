@@ -22,3 +22,5 @@ data/raw/islamqaorg_urls.txt
 data/raw/islamqa.parquet
 data/raw/islamqaorg.json
 data/raw/scrape_islamqaorg.log
+
+.agents/
